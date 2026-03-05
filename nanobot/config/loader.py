@@ -27,7 +27,11 @@ def load_config(config_path: Path | None = None) -> Config:
     Returns:
         Loaded configuration object.
     """
-    path = config_path or get_config_path()
+    # path = config_path or get_config_path()
+    if config_path:
+       path = Path.home() / ".nanobot" / config_path
+    else:
+       path = get_config_path()
 
     if path.exists():
         try:
@@ -38,7 +42,6 @@ def load_config(config_path: Path | None = None) -> Config:
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
-
     return Config()
 
 

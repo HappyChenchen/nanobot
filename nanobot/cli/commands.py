@@ -154,7 +154,9 @@ def main(
 
 
 @app.command()
-def onboard():
+def onboard(
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
+):
     """Initialize nanobot configuration and workspace."""
     from nanobot.config.loader import get_config_path, load_config, save_config
     from nanobot.config.schema import Config
@@ -171,7 +173,7 @@ def onboard():
             save_config(config)
             console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
         else:
-            config = load_config()
+            config = load_config(name + '-config.json')
             save_config(config)
             console.print(f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)")
     else:
@@ -245,6 +247,7 @@ def _make_provider(config: Config):
 def gateway(
     port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
 ):
     """Start the nanobot gateway."""
     from nanobot.agent.loop import AgentLoop
@@ -262,7 +265,8 @@ def gateway(
 
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
 
-    config = load_config()
+    config = load_config(name + '-config.json')
+
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -283,8 +287,8 @@ def gateway(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         reasoning_effort=config.agents.defaults.reasoning_effort,
-        brave_api_key=config.tools.web.search.api_key or None,
         web_proxy=config.tools.web.proxy or None,
+        web_search_config=config.tools.web.search.model_dump(),
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -422,6 +426,7 @@ def agent(
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
 ):
     """Interact with the agent directly."""
     from loguru import logger
@@ -431,7 +436,7 @@ def agent(
     from nanobot.config.loader import get_data_dir, load_config
     from nanobot.cron.service import CronService
 
-    config = load_config()
+    config = load_config(name + '-config.json')
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
@@ -456,8 +461,8 @@ def agent(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         reasoning_effort=config.agents.defaults.reasoning_effort,
-        brave_api_key=config.tools.web.search.api_key or None,
         web_proxy=config.tools.web.proxy or None,
+        web_search_config=config["tools"]["web"]["search"],
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -597,11 +602,13 @@ app.add_typer(channels_app, name="channels")
 
 
 @channels_app.command("status")
-def channels_status():
+def channels_status(
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
+):
     """Show channel status."""
     from nanobot.config.loader import load_config
 
-    config = load_config()
+    config = load_config(name + '-config.json')
 
     table = Table(title="Channel Status")
     table.add_column("Channel", style="cyan")
@@ -748,13 +755,15 @@ def _get_bridge_dir() -> Path:
 
 
 @channels_app.command("login")
-def channels_login():
+def channels_login(
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
+):
     """Link device via QR code."""
     import subprocess
 
     from nanobot.config.loader import load_config
 
-    config = load_config()
+    config = load_config(name + '-config.json')
     bridge_dir = _get_bridge_dir()
 
     console.print(f"{__logo__} Starting bridge...")
@@ -927,6 +936,7 @@ def cron_enable(
 def cron_run(
     job_id: str = typer.Argument(..., help="Job ID to run"),
     force: bool = typer.Option(False, "--force", "-f", help="Run even if disabled"),
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
 ):
     """Manually run a job."""
     from loguru import logger
@@ -938,7 +948,7 @@ def cron_run(
     from nanobot.cron.types import CronJob
     logger.disable("nanobot")
 
-    config = load_config()
+    config = load_config(name + '-config.json')
     provider = _make_provider(config)
     bus = MessageBus()
     agent_loop = AgentLoop(
@@ -951,8 +961,8 @@ def cron_run(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         reasoning_effort=config.agents.defaults.reasoning_effort,
-        brave_api_key=config.tools.web.search.api_key or None,
         web_proxy=config.tools.web.proxy or None,
+        web_search_config=config["tools"]["web"]["search"],
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
@@ -993,12 +1003,14 @@ def cron_run(
 
 
 @app.command()
-def status():
+def status(
+    name: str = typer.Option("ikun", "--name", "-n", help="Robot name"),
+):
     """Show nanobot status."""
     from nanobot.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
-    config = load_config()
+    config = load_config(name + '-config.json')
     workspace = config.workspace_path
 
     console.print(f"{__logo__} nanobot Status\n")

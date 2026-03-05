@@ -6,9 +6,11 @@ import os
 import re
 from typing import Any
 from urllib.parse import urlparse
+from abc import ABC, abstractmethod
 
 import httpx
 from loguru import logger
+from tavily import TavilyClient
 
 from nanobot.agent.tools.base import Tool
 
@@ -43,68 +45,101 @@ def _validate_url(url: str) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-
-class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+class BaseWebSearchTool(Tool, ABC):
+    """Abstract base class for web search tools."""
 
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = "Search the web."
     parameters = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10}
+            "query": {"type": "string"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 10}
         },
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
-        self._init_api_key = api_key
+    def __init__(self, api_key: str, max_results: int = 5, proxy: str | None = None):
+        self.api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
 
-    @property
-    def api_key(self) -> str:
-        """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
+    @abstractmethod
+    async def execute(self, query: str, count: int | None = None, **kwargs):
+        pass
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+    def _format_results(self, query: str, results: list[dict]) -> str:
+        if not results:
+            return f"No results for: {query}"
+
+        lines = [f"Results for: {query}\n"]
+        for i, item in enumerate(results, 1):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            desc = item.get("description") or item.get("content", "")
+
+            lines.append(f"{i}. {title}")
+            lines.append(f"   {url}")
+            if desc:
+                lines.append(f"   {desc[:200]}")
+
+        return "\n".join(lines)
+
+class BraveWebSearchTool(BaseWebSearchTool):
+
+    async def execute(self, query: str, count: int | None = None, **kwargs):
         if not self.api_key:
-            return (
-                "Error: Brave Search API key not configured. Set it in "
-                "~/.nanobot/config.json under tools.web.search.apiKey "
-                "(or export BRAVE_API_KEY), then restart the gateway."
+            return "Error: BRAVE_API_KEY not configured."
+
+        n = min(max(count or self.max_results, 1), 10)
+
+        async with httpx.AsyncClient(proxy=self.proxy, timeout=10.0) as client:
+            r = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": n},
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": self.api_key
+                },
             )
+            r.raise_for_status()
 
-        try:
-            n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
-                r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
-                    headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
-                    timeout=10.0
-                )
-                r.raise_for_status()
+        results = r.json().get("web", {}).get("results", [])[:n]
+        return self._format_results(query, results)
 
-            results = r.json().get("web", {}).get("results", [])[:n]
-            if not results:
-                return f"No results for: {query}"
+class TavilyWebSearchTool(BaseWebSearchTool):
 
-            lines = [f"Results for: {query}\n"]
-            for i, item in enumerate(results, 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
-                if desc := item.get("description"):
-                    lines.append(f"   {desc}")
-            return "\n".join(lines)
-        except httpx.ProxyError as e:
-            logger.error("WebSearch proxy error: {}", e)
-            return f"Proxy error: {e}"
-        except Exception as e:
-            logger.error("WebSearch error: {}", e)
-            return f"Error: {e}"
+    async def execute(self, query: str, count: int | None = None, **kwargs):
+        if not self.api_key:
+            return "Error: TAVILY_API_KEY not configured."
 
+        n = min(max(count or self.max_results, 1), 10)
+
+        async with httpx.AsyncClient(proxy=self.proxy, timeout=15.0) as client:
+            r = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": self.api_key,
+                    "query": query,
+                    "max_results": n,
+                    "include_answer": False,
+                },
+            )
+            r.raise_for_status()
+
+        results = r.json().get("results", [])[:n]
+        return self._format_results(query, results)
+
+def create_web_search_tool(config: dict, proxy: str | None = None) -> BaseWebSearchTool:
+    search_cfg = config
+    provider = search_cfg.get("provider", "brave").lower()
+    if provider == "tavily":
+        api_key = search_cfg.get("tavily", {}).get("apiKey") or os.environ.get("TAVILY_API_KEY", "")
+        return TavilyWebSearchTool(api_key=api_key, proxy=proxy)
+
+    # default brave
+    api_key = search_cfg.get("brave", {}).get("apiKey") or os.environ.get("BRAVE_API_KEY", "")
+    return BraveWebSearchTool(api_key=api_key, proxy=proxy)
 
 class WebFetchTool(Tool):
     """Fetch and extract content from a URL using Readability."""

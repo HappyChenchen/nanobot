@@ -284,7 +284,9 @@ class GatewayConfig(Base):
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Brave Search API key
+    tavily: dict | None = None  # Tavily Search API key
+    brave: dict | None = None # Brave Search API key
+    provider: str = ""
     max_results: int = 5
 
 
